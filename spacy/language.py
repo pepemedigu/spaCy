@@ -1235,6 +1235,95 @@ class Language:
             sgd(W, dW, key=key)  # type: ignore[call-arg, misc]
         return losses
 
+    def distill(
+        self,
+        teacher: "Language",
+        examples: Iterable[Example],
+        _: Optional[Any] = None,
+        *,
+        drop: float = 0.0,
+        sgd: Optional[Optimizer] = None,
+        losses: Optional[Dict[str, float]] = None,
+        component_cfg: Optional[Dict[str, Dict[str, Any]]] = None,
+        exclude: Iterable[str] = SimpleFrozenList(),
+        annotates: Iterable[str] = SimpleFrozenList(),
+    ):
+        """Update the models in the pipeline.
+
+        examples (Iterable[Example]): A batch of examples
+        _: Should not be set - serves to catch backwards-incompatible scripts.
+        drop (float): The dropout rate.
+        sgd (Optimizer): An optimizer.
+        losses (Dict[str, float]): Dictionary to update with the loss, keyed by
+            component.
+        component_cfg (Dict[str, Dict]): Config parameters for specific pipeline
+            components, keyed by component name.
+        exclude (Iterable[str]): Names of components that shouldn't be updated.
+        annotates (Iterable[str]): Names of components that should set
+            annotations on the predicted examples after updating.
+        RETURNS (Dict[str, float]): The updated losses dictionary
+
+        DOCS: https://spacy.io/api/language#update
+        """
+        if _ is not None:
+            raise ValueError(Errors.E989)
+        if losses is None:
+            losses = {}
+        if len(examples) == 0:
+            return losses
+        validate_examples(examples, "Language.update")
+        student_examples = _copy_examples(examples)
+        teacher_examples = _copy_examples(examples)
+        if sgd is None:
+            if self._optimizer is None:
+                self._optimizer = self.create_optimizer()
+            sgd = self._optimizer
+        if component_cfg is None:
+            component_cfg = {}
+        pipe_kwargs = {}
+        for name, student_proc in self.pipeline:
+            component_cfg.setdefault(name, {})
+            pipe_kwargs[name] = deepcopy(component_cfg[name])
+            component_cfg[name].setdefault("drop", drop)
+            pipe_kwargs[name].setdefault("batch_size", self.batch_size)
+        teacher_pipes = dict(teacher.pipeline)
+        for name, student_proc in self.pipeline:
+            if name not in exclude and hasattr(student_proc, "update"):
+                # XXX: explicitly check that the teacher has the same trainable pipes.
+                teacher_proc = teacher_pipes[name]
+                student_proc.distill(
+                    teacher_proc,
+                    teacher_examples,
+                    student_examples,
+                    sgd=None,
+                    losses=losses,
+                    **component_cfg[name],
+                )
+            if sgd not in (None, False):
+                if (
+                    name not in exclude
+                    and hasattr(student_proc, "is_trainable")
+                    and student_proc.is_trainable
+                    and student_proc.model not in (True, False, None)
+                ):
+                    student_proc.finish_update(sgd)
+            if name in annotates:
+                for proc, examples in zip(
+                    [teacher_proc, student_proc], [teacher_examples, student_examples]
+                ):
+                    for doc, eg in zip(
+                        _pipe(
+                            (eg.predicted for eg in examples),
+                            proc=proc,
+                            name=name,
+                            default_error_handler=self.default_error_handler,
+                            kwargs=pipe_kwargs[name],
+                        ),
+                        examples,
+                    ):
+                        eg.predicted = doc
+        return losses
+
     def begin_training(
         self,
         get_examples: Optional[Callable[[], Iterable[Example]]] = None,

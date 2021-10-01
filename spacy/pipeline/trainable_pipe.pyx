@@ -55,6 +55,40 @@ cdef class TrainablePipe(Pipe):
         except Exception as e:
             error_handler(self.name, self, [doc], e)
 
+    def distill(self,
+               teacher_pipe: "TrainablePipe",
+               teacher_examples: Iterable["Example"],
+               student_examples: Iterable["Example"],
+               *,
+               drop: float=0.0,
+               sgd: Optimizer=None,
+               losses: Optional[Dict[str, float]]=None) -> Dict[str, float]:
+        if losses is None:
+            losses = {}
+        if not hasattr(self, "model") or self.model in (None, True, False):
+            return losses
+        losses.setdefault(self.name, 0.0)
+
+        validate_examples(teacher_examples, "TrainablePipe.distill")
+        validate_examples(student_examples, "TrainablePipe.distill")
+
+        if not any(len(eg.predicted) if eg.predicted else 0 for eg in teacher_examples):
+            return losses
+        if not any(len(eg.predicted) if eg.predicted else 0 for eg in student_examples):
+            return losses
+
+        set_dropout_rate(self.model, drop)
+        teacher_scores = teacher_pipe.model.predict([eg.predicted for eg in teacher_examples])
+        student_scores, bp_student_scores = self.model.begin_update([eg.predicted for eg in student_examples])
+
+        loss, d_scores = self.get_distill_loss(teacher_scores, student_scores)
+        bp_student_scores(d_scores)
+
+        if sgd not in (None, False):
+            self.finish_update(sgd)
+        losses[self.name] += loss
+        return losses
+
     def pipe(self, stream: Iterable[Doc], *, batch_size: int=128) -> Iterator[Doc]:
         """Apply the pipe to a stream of documents. This usually happens under
         the hood when the nlp object is called on a text and all components are
@@ -155,6 +189,9 @@ cdef class TrainablePipe(Pipe):
         DOCS: https://spacy.io/api/pipe#rehearse
         """
         pass
+
+    def get_distill_loss(self, teacher_scores, student_scores) -> Tuple[float, float]:
+        raise NotImplementedError(Errors.E931.format(parent="TrainablePipe", method="distill_loss", name=self.name))
 
     def get_loss(self, examples: Iterable[Example], scores) -> Tuple[float, float]:
         """Find the loss and gradient of loss for the batch of documents and
