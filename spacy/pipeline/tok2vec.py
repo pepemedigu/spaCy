@@ -1,4 +1,4 @@
-from typing import Sequence, Iterable, Optional, Dict, Callable, List, Any
+from typing import Sequence, Iterable, Optional, Dict, Callable, List, Any, Tuple
 from thinc.api import Model, set_dropout_rate, Optimizer, Config
 from itertools import islice
 
@@ -108,6 +108,22 @@ class Tok2Vec(TrainablePipe):
             for node in component.model.walk():
                 if isinstance(node, Tok2VecListener) and node.upstream_name in names:
                     self.add_listener(node, component.name)
+
+
+    def distill(self,
+               teacher_pipe: "TrainablePipe",
+               teacher_examples: Iterable["Example"],
+               student_examples: Iterable["Example"],
+               *,
+               drop: float=0.0,
+               sgd: Optimizer=None,
+               losses: Optional[Dict[str, float]]=None) -> Dict[str, float]:
+        # Update tok2vec using regular backprop in distillation.
+        # XXX - in the future we could implement MSE loss?
+        docs = [eg.predicted for eg in teacher_examples]
+        teacher_pipe.set_annotations(docs, teacher_pipe.predict(docs))
+        return self.update(student_examples, drop=drop, sgd=sgd, losses=losses)
+
 
     def predict(self, docs: Iterable[Doc]):
         """Apply the pipeline's model to a batch of docs, without modifying them.
