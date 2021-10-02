@@ -383,6 +383,17 @@ class ConfigSchemaInit(BaseModel):
         arbitrary_types_allowed = True
 
 
+class ConfigSchemaDistillationEmpty(BaseModel):
+    class Config:
+        extra = "forbid"
+
+
+class ConfigSchemaDistillation(BaseModel):
+    # fmt: off
+    distill_corpus: StrictStr = Field(..., title="Path in the config to the distillation data")
+    # fmt: on
+
+
 class ConfigSchema(BaseModel):
     training: ConfigSchemaTraining
     nlp: ConfigSchemaNlp
@@ -390,6 +401,7 @@ class ConfigSchema(BaseModel):
     components: Dict[str, Dict[str, Any]]
     corpora: Dict[str, Reader]
     initialize: ConfigSchemaInit
+    distill: Union[ConfigSchemaDistillation, ConfigSchemaDistillationEmpty] = {}
 
     class Config:
         extra = "allow"

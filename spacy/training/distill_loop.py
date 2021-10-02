@@ -10,7 +10,7 @@ import shutil
 
 from .loop import create_evaluation_callback, create_train_batches, subdivide_batch
 from .loop import update_meta, create_before_to_disk_callback, clean_output_dir
-from ..schemas import ConfigSchemaTraining
+from ..schemas import ConfigSchemaDistillation, ConfigSchemaTraining
 from ..util import resolve_dot_names, registry
 
 if TYPE_CHECKING:
@@ -54,8 +54,9 @@ def distill(
     if use_gpu >= 0 and allocator:
         set_gpu_allocator(allocator)
     T = registry.resolve(config["training"], schema=ConfigSchemaTraining)
-    dot_names = [T["train_corpus"], T["dev_corpus"]]
-    train_corpus, dev_corpus = resolve_dot_names(config, dot_names)
+    D = registry.resolve(config["distillation"], schema=ConfigSchemaDistillation)
+    dot_names = [D["distill_corpus"], T["dev_corpus"]]
+    distill_corpus, dev_corpus = resolve_dot_names(config, dot_names)
     optimizer = T["optimizer"]
     score_weights = T["score_weights"]
     batcher = T["batcher"]
@@ -83,7 +84,7 @@ def distill(
         teacher,
         student,
         optimizer,
-        create_train_batches(student, train_corpus, batcher, T["max_epochs"]),
+        create_train_batches(student, distill_corpus, batcher, T["max_epochs"]),
         create_evaluation_callback(student, dev_corpus, score_weights),
         dropout=T["dropout"],
         accumulate_gradient=T["accumulate_gradient"],
