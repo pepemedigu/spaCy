@@ -391,6 +391,7 @@ class ConfigSchemaDistillationEmpty(BaseModel):
 class ConfigSchemaDistillation(BaseModel):
     # fmt: off
     distill_corpus: StrictStr = Field(..., title="Path in the config to the distillation data")
+    pipe_map: Dict[str, str] = Field(..., title="Mapping from teacher to student pipe")
     # fmt: on
 
 

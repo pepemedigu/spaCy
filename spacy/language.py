@@ -1247,6 +1247,7 @@ class Language:
         component_cfg: Optional[Dict[str, Dict[str, Any]]] = None,
         exclude: Iterable[str] = SimpleFrozenList(),
         annotates: Iterable[str] = SimpleFrozenList(),
+        pipe_map: Dict[str, str],
     ):
         """Update the models in the pipeline.
 
@@ -1289,8 +1290,9 @@ class Language:
         teacher_pipes = dict(teacher.pipeline)
         for name, student_proc in self.pipeline:
             if name not in exclude and hasattr(student_proc, "update"):
-                # XXX: explicitly check that the teacher has the same trainable pipes.
-                teacher_proc = teacher_pipes[name]
+                # XXX: validate earlier that all pipes are mappable.
+                teacher_pipe_name = pipe_map[name] if name in pipe_map else name
+                teacher_proc = teacher_pipes[teacher_pipe_name]
                 student_proc.distill(
                     teacher_proc,
                     teacher_examples,

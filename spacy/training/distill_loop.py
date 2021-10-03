@@ -62,6 +62,7 @@ def distill(
     batcher = T["batcher"]
     train_logger = T["logger"]
     before_to_disk = create_before_to_disk_callback(T["before_to_disk"])
+    pipe_map = D["pipe_map"]
 
     # Helper function to save checkpoints. This is a closure for convenience,
     # to avoid passing in all the args all the time.
@@ -93,6 +94,7 @@ def distill(
         eval_frequency=T["eval_frequency"],
         exclude=frozen_components,
         annotating_components=annotating_components,
+        pipe_map=pipe_map,
     )
     clean_output_dir(output_path)
     stdout.write(msg.info(f"Pipeline: {student.pipe_names}") + "\n")
@@ -155,6 +157,7 @@ def distill_while_improving(
     max_steps: int,
     exclude: List[str],
     annotating_components: List[str],
+    pipe_map: Dict[str, str],
 ):
     """Train until an evaluation stops improving. Works as a generator,
     with each iteration yielding a tuple `(batch, info, is_best_checkpoint)`,
@@ -213,6 +216,7 @@ def distill_while_improving(
                 sgd=False,
                 exclude=exclude,
                 annotates=annotating_components,
+                pipe_map=pipe_map,
             )
         # TODO: refactor this so we don't have to run it separately in here
         for name, proc in student.pipeline:
