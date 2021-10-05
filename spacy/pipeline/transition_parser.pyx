@@ -9,7 +9,8 @@ from libc.stdlib cimport calloc, free
 import random
 
 import srsly
-from thinc.api import set_dropout_rate, CupyOps
+from thinc.api import chain, set_dropout_rate, softmax_activation, CupyOps
+from thinc.api import SequenceCategoricalCrossentropy
 from thinc.extra.search cimport Beam
 import numpy.random
 import numpy
@@ -239,11 +240,13 @@ cdef class Parser(TrainablePipe):
         set_dropout_rate(self.model, drop)
         docs = [eg.predicted for eg in teacher_examples]
 
-        teacher_model = teacher_pipe.model.predict(docs)
-        student_model, backprop_tok2vec = self.model.begin_update(docs)
+        teacher_step_model = teacher_pipe.model.predict(docs)
+        student_step_model, backprop_tok2vec = self.model.begin_update(docs)
+
+        teacher_model = chain(teacher_step_model, softmax_activation())
+        student_model = chain(student_step_model, softmax_activation())
 
         states = teacher_pipe.moves.init_batch(docs)
-        n_scores = 0.
         loss = 0.
         while states:
             teacher_scores = teacher_model.predict(states)
@@ -253,28 +256,29 @@ cdef class Parser(TrainablePipe):
             loss += state_loss
             self.transition_states(states, student_scores)
             states = [state for state in states if not state.is_final()]
-            n_scores += d_scores.size
 
         backprop_tok2vec(docs)
 
         if sgd is not None:
             self.finish_update(sgd)
 
-        losses[self.name] += loss / n_scores
+        losses[self.name] += loss
 
         del backprop
         del backprop_tok2vec
-        teacher_model.clear_memory()
-        student_model.clear_memory()
+        teacher_step_model.clear_memory()
+        student_step_model.clear_memory()
         del teacher_model
         del student_model
 
         return losses
 
     def get_distill_loss(self, teacher_scores, student_scores):
-        d_scores = (student_scores - teacher_scores) / teacher_scores.shape[0]
-        loss = (d_scores**2).sum()
-        return loss, d_scores
+        loss_func = SequenceCategoricalCrossentropy(normalize=False)
+        d_scores, loss = loss_func(student_scores, teacher_scores)
+        if self.model.ops.xp.isnan(loss):
+            raise ValueError(Errors.E910.format(name=self.name))
+        return float(loss), d_scores
 
     def pipe(self, docs, *, int batch_size=256):
         """Process a stream of documents.
