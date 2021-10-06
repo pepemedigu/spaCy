@@ -1289,7 +1289,7 @@ class Language:
             pipe_kwargs[name].setdefault("batch_size", self.batch_size)
         teacher_pipes = dict(teacher.pipeline)
         for name, student_proc in self.pipeline:
-            if name not in exclude and hasattr(student_proc, "update"):
+            if name not in exclude and hasattr(student_proc, "distill"):
                 # XXX: validate earlier that all pipes are mappable.
                 teacher_pipe_name = pipe_map[name] if name in pipe_map else name
                 teacher_proc = teacher_pipes[teacher_pipe_name]
@@ -1339,12 +1339,15 @@ class Language:
         self,
         get_examples: Optional[Callable[[], Iterable[Example]]] = None,
         *,
+        labels: Dict[str, Any] = None,
         sgd: Optional[Optimizer] = None,
     ) -> Optimizer:
         """Initialize the pipe for training, using data examples if available.
 
         get_examples (Callable[[], Iterable[Example]]): Optional function that
             returns gold-standard Example objects.
+        labels (Dict[str, Any]): labels to pass to pipe initialization, by
+            name of the pipe.
         sgd (Optional[Optimizer]): An optimizer to use for updates. If not
             provided, will be created using the .create_optimizer() method.
         RETURNS (thinc.api.Optimizer): The optimizer.
@@ -1389,6 +1392,8 @@ class Language:
         for name, proc in self.pipeline:
             if isinstance(proc, ty.InitializableComponent):
                 p_settings = I["components"].get(name, {})
+                if labels is not None and name in labels:
+                    p_settings["labels"] = labels[name]
                 p_settings = validate_init_settings(
                     proc.initialize, p_settings, section="components", name=name
                 )

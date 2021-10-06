@@ -8,7 +8,7 @@ import sys
 from ._util import app, Arg, Opt, parse_config_overrides, show_validation_error
 from ._util import import_code, setup_gpu
 from ..training.distill_loop import distill
-from ..training.initialize import init_nlp
+from ..training.initialize import init_nlp_distill
 from .. import util
 
 
@@ -53,7 +53,7 @@ def distill_cli(
     msg.good("Loaded teacher pipeline")
     msg.divider("Initializing student pipeline")
     with show_validation_error(student_config_path, hint_fill=False):
-        student = init_nlp(student_config, use_gpu=use_gpu)
+        student = init_nlp_distill(student_config, teacher, use_gpu=use_gpu)
     msg.good("Initialized student pipeline")
     msg.divider("Training pipeline")
     distill(teacher, student, output_path, use_gpu=use_gpu, stdout=sys.stdout, stderr=sys.stderr)

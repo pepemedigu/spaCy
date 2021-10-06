@@ -15,27 +15,98 @@ from .pretrain import get_tok2vec_ref
 from ..lookups import Lookups
 from ..vectors import Vectors, Mode as VectorsMode
 from ..errors import Errors, Warnings
-from ..schemas import ConfigSchemaTraining
+from ..schemas import ConfigSchemaDistillation, ConfigSchemaTraining
 from ..util import registry, load_model_from_config, resolve_dot_names, logger
 from ..util import load_model, ensure_path, get_sourced_components
 from ..util import OOV_RANK, DEFAULT_OOV_PROB
+from . import Example
 
 if TYPE_CHECKING:
     from ..language import Language  # noqa: F401
 
 
-def init_nlp(config: Config, *, use_gpu: int = -1) -> "Language":
-    raw_config = config
-    config = raw_config.interpolate()
-    if "seed" not in config["training"]:
-        raise ValueError(Errors.E1015.format(value="[training] seed"))
+def _init_gpu_allocator(config: Config, use_gpu: int):
     if "gpu_allocator" not in config["training"]:
         raise ValueError(Errors.E1015.format(value="[training] gpu_allocator"))
-    if config["training"]["seed"] is not None:
-        fix_random_seed(config["training"]["seed"])
     allocator = config["training"]["gpu_allocator"]
     if use_gpu >= 0 and allocator:
         set_gpu_allocator(allocator)
+
+
+def _init_seed(config):
+    if "seed" not in config["training"]:
+        raise ValueError(Errors.E1015.format(value="[training] seed"))
+    if config["training"]["seed"] is not None:
+        fix_random_seed(config["training"]["seed"])
+
+
+def init_nlp_distill(config: Config, teacher: "Language", *, use_gpu: int = -1):
+    raw_config = config
+    config = raw_config.interpolate()
+    _init_gpu_allocator(config, use_gpu)
+    _init_seed(config)
+
+    # Use original config here before it's resolved to functions
+    sourced = get_sourced_components(config)
+    nlp = load_model_from_config(raw_config, auto_fill=True)
+    logger.info("Set up nlp object from config")
+    config = nlp.config.interpolate()
+    # Resolve all training-relevant sections using the filled nlp config
+    T = registry.resolve(config["training"], schema=ConfigSchemaTraining)
+    D = registry.resolve(config["distillation"], schema=ConfigSchemaDistillation)
+    if not isinstance(D["distill_corpus"], str):
+        raise ConfigValidationError(
+            desc=Errors.E897.format(
+                field="distill.distill_corpus", type=type(T["distill_corpus"])
+            )
+        )
+    if not isinstance(T["dev_corpus"], str):
+        raise ConfigValidationError(
+            desc=Errors.E897.format(
+                field="training.dev_corpus", type=type(T["dev_corpus"])
+            )
+        )
+    dot_names = [D["distill_corpus"], T["dev_corpus"]]
+    distill_corpus, dev_corpus = resolve_dot_names(config, dot_names)
+    optimizer = T["optimizer"]
+    logger.info(f"Pipeline: {nlp.pipe_names}")
+
+    # Make sure that listeners are defined before initializing further
+    nlp._link_components()
+
+    # Get teacher labels to initialize student with.
+    pipe_map = D["pipe_map"]
+    teacher_pipes = dict(teacher.pipeline)
+    labels = {}
+    for name, pipe in nlp.pipeline:
+        teacher_pipe_name = pipe_map[name] if name in pipe_map else name
+        teacher_pipe = teacher_pipes[teacher_pipe_name]
+        if getattr(teacher_pipe, "label_data", None) is not None:
+            labels[name] = teacher_pipe.label_data
+
+    if T["max_epochs"] == -1:
+        sample_size = 100
+        logger.debug(
+            f"Due to streamed train corpus, using only first {sample_size} "
+            f"examples for initialization. If necessary, provide all labels "
+            f"in [initialize]. More info: https://spacy.io/api/cli#init_labels"
+        )
+        examples = islice(distill_corpus(nlp), sample_size)
+    else:
+        examples = distill_corpus(nlp)
+    examples = list(examples)
+
+    with nlp.select_pipes(disable=[]):
+        nlp.initialize(lambda: examples, sgd=optimizer, labels=labels)
+
+    return nlp
+
+
+def init_nlp(config: Config, *, use_gpu: int = -1) -> "Language":
+    raw_config = config
+    config = raw_config.interpolate()
+    _init_gpu_allocator(config, use_gpu)
+    _init_seed(config)
     # Use original config here before it's resolved to functions
     sourced = get_sourced_components(config)
     nlp = load_model_from_config(raw_config, auto_fill=True)
