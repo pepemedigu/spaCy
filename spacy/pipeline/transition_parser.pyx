@@ -10,7 +10,7 @@ import random
 
 import srsly
 from thinc.api import chain, set_dropout_rate, softmax_activation, CupyOps
-from thinc.api import SequenceCategoricalCrossentropy
+from thinc.api import SequenceCategoricalCrossentropy, use_ops
 from thinc.extra.search cimport Beam
 import numpy.random
 import numpy
@@ -243,8 +243,9 @@ cdef class Parser(TrainablePipe):
         teacher_step_model = teacher_pipe.model.predict(docs)
         student_step_model, backprop_tok2vec = self.model.begin_update(docs)
 
-        teacher_model = chain(teacher_step_model, softmax_activation())
-        student_model = chain(student_step_model, softmax_activation())
+        with use_ops("numpy"):
+            teacher_model = chain(teacher_step_model, softmax_activation())
+            student_model = chain(student_step_model, softmax_activation())
 
         states = teacher_pipe.moves.init_batch(docs)
         loss = 0.
