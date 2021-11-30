@@ -1,4 +1,5 @@
 from typing import Union, Dict, Optional, Any, IO, TYPE_CHECKING
+import finalfusion
 from thinc.api import Config, fix_random_seed, set_gpu_allocator
 from thinc.api import ConfigValidationError
 from pathlib import Path
@@ -163,9 +164,10 @@ def load_vectors_into_model(
     if (
         len(vectors_nlp.vocab.vectors.keys()) == 0
         and vectors_nlp.vocab.vectors.mode != VectorsMode.floret
+        and vectors_nlp.vocab.vectors.mode != VectorsMode.finalfusion
     ) or (
         vectors_nlp.vocab.vectors.data.shape[0] == 0
-        and vectors_nlp.vocab.vectors.mode == VectorsMode.floret
+        and (vectors_nlp.vocab.vectors.mode == VectorsMode.floret or vectors_nlp.vocab.vectors.mode == VectorsMode.finalfusion)
     ):
         logger.warning(Warnings.W112.format(name=name))
 
@@ -213,6 +215,8 @@ def convert_vectors(
         for lex in nlp.vocab:
             if lex.rank and lex.rank != OOV_RANK:
                 nlp.vocab.vectors.add(lex.orth, row=lex.rank)  # type: ignore[attr-defined]
+    elif mode == VectorsMode.finalfusion:
+        nlp.vocab.vectors = Vectors(strings=nlp.vocab.strings, finalfusion_path=vectors_loc, mode = VectorsMode.finalfusion)
     else:
         if vectors_loc:
             logger.info(f"Reading vectors from {vectors_loc}")
@@ -224,7 +228,7 @@ def convert_vectors(
             logger.info(f"Loaded vectors from {vectors_loc}")
         else:
             vectors_data, vector_keys = (None, None)
-        if vector_keys is not None and mode != VectorsMode.floret:
+        if vector_keys is not None and mode != VectorsMode.floret and mode != VectorsMode.floret:
             for word in vector_keys:
                 if word not in nlp.vocab:
                     nlp.vocab[word]
@@ -245,7 +249,7 @@ def convert_vectors(
     else:
         nlp.vocab.vectors.name = name
     nlp.meta["vectors"]["name"] = nlp.vocab.vectors.name
-    if prune >= 1 and mode != VectorsMode.floret:
+    if prune >= 1 and mode == VectorsMode.default:
         nlp.vocab.prune_vectors(prune)
 
 

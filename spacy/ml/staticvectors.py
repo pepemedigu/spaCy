@@ -49,7 +49,7 @@ def forward(
         V = cast(Floats2d, model.ops.asarray(vocab.vectors.data))
         rows = vocab.vectors.find(keys=keys)
         V = model.ops.as_contig(V[rows])
-    elif vocab.vectors.mode == Mode.floret:
+    elif vocab.vectors.mode == Mode.floret or vocab.vectors.mode == Mode.finalfusion:
         V = cast(Floats2d, vocab.vectors.get_batch(keys))
         V = model.ops.as_contig(V)
     else:

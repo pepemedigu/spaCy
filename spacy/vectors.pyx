@@ -1,6 +1,7 @@
-cimport numpy as np
+import numpy as np
 from libc.stdint cimport uint32_t
 from cython.operator cimport dereference as deref
+from finalfusion import Embeddings
 from libcpp.set cimport set as cppset
 from murmurhash.mrmr cimport hash128_x64
 
@@ -27,6 +28,7 @@ def unpickle_vectors(bytes_data):
 
 class Mode(str, Enum):
     default = "default"
+    finalfusion = "finalfusion"
     floret = "floret"
 
     @classmethod
@@ -54,6 +56,8 @@ cdef class Vectors:
     cdef public object strings
     cdef public object name
     cdef readonly object mode
+    cdef object finalfusion
+    cdef readonly object finalfusion_path
     cdef public object data
     cdef public object key2row
     cdef cppset[int] _unset
@@ -64,7 +68,7 @@ cdef class Vectors:
     cdef readonly unicode bow
     cdef readonly unicode eow
 
-    def __init__(self, *, strings=None, shape=None, data=None, keys=None, name=None, mode=Mode.default, minn=0, maxn=0, hash_count=1, hash_seed=0, bow="<", eow=">"):
+    def __init__(self, *, strings=None, shape=None, data=None, keys=None, name=None, mode=Mode.default, minn=0, maxn=0, hash_count=1, hash_seed=0, bow="<", eow=">", finalfusion_path=None):
         """Create a new vector store.
 
         strings (StringStore): The string store.
@@ -126,6 +130,15 @@ cdef class Vectors:
                 raise ValueError(Errors.E861)
             self.data = data
             self._unset = cppset[int]()
+        elif self.mode == Mode.finalfusion:
+            self.finalfusion_path = finalfusion_path
+            self.finalfusion = Embeddings(str(finalfusion_path))
+            shape = (0, self.finalfusion.storage().shape()[1])
+            ops = get_current_ops()
+            data = ops.xp.zeros(shape, dtype="f")
+            self._unset = cppset[int]({i for i in range(data.shape[0])})
+            self.data = data
+
 
     @property
     def shape(self):
@@ -157,6 +170,8 @@ cdef class Vectors:
         DOCS: https://spacy.io/api/vectors#is_full
         """
         if self.mode == Mode.floret:
+            return True
+        elif self.mode == Mode.finalfusion:
             return True
         return self._unset.size() == 0
 
@@ -191,6 +206,8 @@ cdef class Vectors:
                 return self.data[i]
         elif self.mode == Mode.floret:
             return self.get_batch([key])[0]
+        elif self.mode == Mode.finalfusion:
+            return self.finalfusion.embedding(key)
         raise KeyError(Errors.E058.format(key=key))
 
     def __setitem__(self, key, vector):
@@ -201,7 +218,7 @@ cdef class Vectors:
 
         DOCS: https://spacy.io/api/vectors#setitem
         """
-        if self.mode == Mode.floret:
+        if self.mode == Mode.floret or self.mode == Mode.finalfusion:
             warnings.warn(Warnings.W115.format(method="Vectors.__setitem__"))
             return
         key = get_string_id(key)
@@ -236,7 +253,7 @@ cdef class Vectors:
 
         DOCS: https://spacy.io/api/vectors#contains
         """
-        if self.mode == Mode.floret:
+        if self.mode == Mode.floret or self.mode == Mode.finalfusion:
             return True
         else:
             return key in self.key2row
@@ -256,7 +273,7 @@ cdef class Vectors:
 
         DOCS: https://spacy.io/api/vectors#resize
         """
-        if self.mode == Mode.floret:
+        if self.mode == Mode.floret or self.mode == Mode.finalfusion:
             warnings.warn(Warnings.W115.format(method="Vectors.resize"))
             return -1
         xp = get_array_module(self.data)
@@ -321,7 +338,7 @@ cdef class Vectors:
             Returns ndarray.
         RETURNS: The requested key, keys, row or rows.
         """
-        if self.mode == Mode.floret:
+        if self.mode == Mode.floret or self.mode == Mode.finalfusion:
             raise ValueError(
                 Errors.E858.format(
                     mode=self.mode,
@@ -382,6 +399,9 @@ cdef class Vectors:
         if self.mode == Mode.default:
             rows = self.find(keys=keys)
             vecs = self.data[rows]
+        elif self.mode == Mode.finalfusion:
+            embeds, _ = self.finalfusion.embedding_batch([self.strings.as_string(key) for key in keys])
+            return ops.asarray(embeds)
         elif self.mode == Mode.floret:
             keys = [self.strings.as_string(key) for key in keys]
             if sum(len(key) for key in keys) == 0:
@@ -419,7 +439,7 @@ cdef class Vectors:
 
         DOCS: https://spacy.io/api/vectors#add
         """
-        if self.mode == Mode.floret:
+        if self.mode == Mode.floret or self.mode == Mode.finalfusion:
             warnings.warn(Warnings.W115.format(method="Vectors.add"))
             return -1
         # use int for all keys and rows in key2row for more efficient access
@@ -462,7 +482,7 @@ cdef class Vectors:
         RETURNS (tuple): The most similar entries as a `(keys, best_rows, scores)`
             tuple.
         """
-        if self.mode == Mode.floret:
+        if self.mode == Mode.floret or Mode.finalfusion:
             raise ValueError(Errors.E858.format(
                 mode=self.mode,
                 alternative="",
@@ -516,6 +536,11 @@ cdef class Vectors:
             return {
                 "mode": Mode(self.mode).value,
             }
+        elif self.mode == Mode.finalfusion:
+            return {
+                "mode": Mode(self.mode).value,
+                "path": str(self.finalfusion_path)
+            }
         elif self.mode == Mode.floret:
             return {
                 "mode": Mode(self.mode).value,
@@ -535,6 +560,7 @@ cdef class Vectors:
         self.hash_seed = cfg.get("hash_seed", 0)
         self.bow = cfg.get("bow", "<")
         self.eow = cfg.get("eow", ">")
+        self.finalfusion_path = cfg.get("path", None)
 
     def to_disk(self, path, *, exclude=tuple()):
         """Save the current state to a directory.
@@ -605,6 +631,8 @@ cdef class Vectors:
         }
 
         util.from_disk(path, serializers, exclude)
+        if self.mode == Mode.finalfusion:
+            self.finalfusion = Embeddings(self.finalfusion_path)
         self._sync_unset()
         return self
 
@@ -661,7 +689,7 @@ cdef class Vectors:
 
         DOCS: https://spacy.io/api/vectors#clear
         """
-        if self.mode == Mode.floret:
+        if self.mode == Mode.floret or self.mode == Mode.finalfusion:
             raise ValueError(Errors.E859)
         self.key2row = {}
         self._sync_unset()
